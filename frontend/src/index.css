@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Clean Light Theme Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f8fafc;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Apple Photos style map marker animations */
+.tripmap-marker {
+  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.tripmap-marker:hover {
+  transform: scale(1.1) translateY(-2px);
+  z-index: 40 !important;
+}
