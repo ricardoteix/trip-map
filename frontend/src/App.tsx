@@ -133,16 +133,20 @@ export const App: React.FC = () => {
   }, []);
 
   const loadMetadata = useCallback(async () => {
-    const [peopleData, tripsData, outingsData, timelineData] = await Promise.all([
-      fetchPeople(),
-      fetchTrips(),
-      fetchOutings(selectedTripId),
-      fetchTimelineStats(selectedTripId, selectedOutingId),
-    ]);
-    setPeople(peopleData);
-    setTrips(tripsData);
-    setOutings(outingsData);
-    setTimelineStats(timelineData);
+    try {
+      const [peopleRes, tripsRes, outingsRes, timelineRes] = await Promise.allSettled([
+        fetchPeople(),
+        fetchTrips(),
+        fetchOutings(selectedTripId),
+        fetchTimelineStats(selectedTripId, selectedOutingId),
+      ]);
+      if (peopleRes.status === "fulfilled") setPeople(peopleRes.value);
+      if (tripsRes.status === "fulfilled") setTrips(tripsRes.value);
+      if (outingsRes.status === "fulfilled") setOutings(outingsRes.value);
+      if (timelineRes.status === "fulfilled") setTimelineStats(timelineRes.value);
+    } catch (err) {
+      console.error("Erro ao carregar metadados:", err);
+    }
   }, [selectedTripId, selectedOutingId]);
 
   const loadMedia = useCallback(

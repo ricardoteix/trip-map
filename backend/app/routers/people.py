@@ -39,12 +39,17 @@ def list_people(
         filter_expr = MediaItem.trip_id.in_(accessible_ids) if accessible_ids else False
         if user_id:
             filter_expr = filter_expr | (MediaItem.uploaded_by_user_id == user_id)
-        people = (
-            db.query(Person)
-            .join(FaceDetection, FaceDetection.person_id == Person.id)
+        matching_person_ids = (
+            db.query(FaceDetection.person_id)
             .join(MediaItem, MediaItem.id == FaceDetection.media_id)
             .filter(filter_expr)
             .distinct()
+            .all()
+        )
+        person_ids = [p[0] for p in matching_person_ids]
+        people = (
+            db.query(Person)
+            .filter(Person.id.in_(person_ids))
             .order_by(Person.is_named.desc(), Person.photo_count.desc(), Person.name.asc())
             .all()
         )

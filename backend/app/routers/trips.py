@@ -92,6 +92,23 @@ def list_trips(
     else:
         query = db.query(Trip)
     trips = query.order_by(Trip.start_date.desc()).all()
+
+    # Automatically register authenticated non-owner users as contributors to shared trips they access
+    if current_user and not current_user.is_admin:
+        new_memberships = False
+        for t in trips:
+            if t.visibility in ["shared", "public"] and t.owner_id and t.owner_id != current_user.id:
+                has_member = (
+                    db.query(TripMember)
+                    .filter(TripMember.trip_id == t.id, TripMember.user_id == current_user.id)
+                    .first()
+                )
+                if not has_member:
+                    db.add(TripMember(trip_id=t.id, user_id=current_user.id, role="contributor"))
+                    new_memberships = True
+        if new_memberships:
+            db.commit()
+
     return [serialize_trip(db, t, current_user) for t in trips if t.media_count > 0 or t.is_manual]
 
 

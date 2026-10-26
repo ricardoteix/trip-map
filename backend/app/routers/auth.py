@@ -179,8 +179,12 @@ async def google_login_callback(
         redirect_target = "/"
         if state:
             try:
-                state_data = json.loads(urllib.parse.unquote(state))
-                join_token = state_data.get("join_token")
+                unquoted = urllib.parse.unquote(state)
+                if unquoted.startswith("{"):
+                    state_data = json.loads(unquoted)
+                    join_token = state_data.get("join_token")
+                else:
+                    join_token = unquoted.strip()
                 if join_token:
                     trip = db.query(Trip).filter(Trip.share_token == join_token).first()
                     if trip:
