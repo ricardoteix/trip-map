@@ -2,15 +2,28 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Calendar,
   Camera,
+  Check,
   ChevronLeft,
   ChevronRight,
+  Copy,
+  Crosshair,
+  Edit3,
+  Loader2,
   MapPin,
   Plus,
+  Search,
   Trash2,
   UserPlus,
   X,
 } from "lucide-react";
 import { MediaItem } from "../types";
+
+export interface CopiedLocation {
+  lat: number;
+  lng: number;
+  locationName?: string;
+  city?: string;
+}
 
 interface LightboxModalProps {
   item: MediaItem | null;
@@ -20,6 +33,17 @@ interface LightboxModalProps {
   onAddPersonTag: (mediaId: string, name: string) => Promise<void>;
   onRemovePersonTag: (mediaId: string, personId: string) => Promise<void>;
   onDeleteMedia: (item: MediaItem) => Promise<void>;
+  onUpdateLocation?: (
+    item: MediaItem,
+    lat: number,
+    lng: number,
+    locationName?: string
+  ) => Promise<void>;
+  copiedLocation?: CopiedLocation | null;
+  onCopyLocation?: (item: MediaItem) => void;
+  onPasteLocation?: (item: MediaItem) => Promise<void>;
+  onPickLocationOnMap?: (item: MediaItem) => void;
+  pickedCoords?: { lat: number; lng: number } | null;
 }
 
 export const LightboxModal: React.FC<LightboxModalProps> = ({
@@ -30,9 +54,46 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
   onAddPersonTag,
   onRemovePersonTag,
   onDeleteMedia,
+  onUpdateLocation,
+  copiedLocation,
+  onCopyLocation,
+  onPasteLocation,
+  onPickLocationOnMap,
+  pickedCoords,
 }) => {
   const [newPersonName, setNewPersonName] = useState("");
   const [adding, setAdding] = useState(false);
+
+  // Location Editing State
+  const [isEditingLocation, setIsEditingLocation] = useState(false);
+  const [customName, setCustomName] = useState(item?.location_name || "");
+  const [latInput, setLatInput] = useState(item?.latitude != null ? String(item.latitude) : "");
+  const [lngInput, setLngInput] = useState(item?.longitude != null ? String(item.longitude) : "");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<{ display_name: string; lat: string; lon: string }[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isSavingLocation, setIsSavingLocation] = useState(false);
+  const [copiedFeedback, setCopiedFeedback] = useState(false);
+
+  useEffect(() => {
+    if (item) {
+      setCustomName(item.location_name || "");
+      setLatInput(item.latitude != null ? String(item.latitude) : "");
+      setLngInput(item.longitude != null ? String(item.longitude) : "");
+      setSearchQuery("");
+      setSearchResults([]);
+      setIsEditingLocation(false);
+      setCopiedFeedback(false);
+    }
+  }, [item?.id]);
+
+  useEffect(() => {
+    if (pickedCoords) {
+      setLatInput(String(pickedCoords.lat.toFixed(6)));
+      setLngInput(String(pickedCoords.lng.toFixed(6)));
+      setIsEditingLocation(true);
+    }
+  }, [pickedCoords]);
 
   const currentIndex = useMemo(() => {
     if (!item || items.length === 0) return -1;
@@ -54,6 +115,20 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
     }
   }, [hasNext, onSelectItem, items, currentIndex]);
 
+  const handleCopyLocation = useCallback(() => {
+    if (!item) return;
+    if (onCopyLocation) {
+      onCopyLocation(item);
+      setCopiedFeedback(true);
+      setTimeout(() => setCopiedFeedback(false), 2000);
+    }
+  }, [item, onCopyLocation]);
+
+  const handlePasteLocation = useCallback(async () => {
+    if (!item || !copiedLocation || !onPasteLocation) return;
+    await onPasteLocation(item);
+  }, [item, copiedLocation, onPasteLocation]);
+
   // Preload adjacent images for instant navigation
   useEffect(() => {
     if (currentIndex < 0) return;
@@ -66,7 +141,7 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
     });
   }, [currentIndex, items]);
 
-  // Keyboard navigation (ArrowLeft, ArrowRight, Escape)
+  // Keyboard navigation & Shortcuts (ArrowLeft, ArrowRight, Escape, Ctrl+C, Ctrl+V)
   useEffect(() => {
     if (!item) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -84,6 +159,24 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
       }
       if (isInputFocused) return;
 
+      // Copy location shortcut
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        if (typeof item.latitude === "number" && typeof item.longitude === "number") {
+          e.preventDefault();
+          handleCopyLocation();
+          return;
+        }
+      }
+
+      // Paste location shortcut
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+        if (copiedLocation) {
+          e.preventDefault();
+          handlePasteLocation();
+          return;
+        }
+      }
+
       if (e.key === "ArrowLeft") {
         e.preventDefault();
         handlePrev();
@@ -95,7 +188,7 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [item, handlePrev, handleNext, onClose]);
+  }, [item, handlePrev, handleNext, onClose, handleCopyLocation, handlePasteLocation, copiedLocation]);
 
   if (!item) return null;
 
@@ -108,6 +201,61 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
       setNewPersonName("");
     } finally {
       setAdding(false);
+    }
+  };
+
+  const handleSearchNominatim = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    setIsSearching(true);
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(
+          searchQuery.trim()
+        )}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setSearchResults(data);
+      }
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleSelectNominatim = (place: { display_name: string; lat: string; lon: string }) => {
+    setLatInput(Number(place.lat).toFixed(6));
+    setLngInput(Number(place.lon).toFixed(6));
+    if (!customName.trim()) {
+      setCustomName(place.display_name.split(",").slice(0, 2).join(","));
+    }
+    setSearchResults([]);
+  };
+
+  const handlePasteFromMemory = () => {
+    if (!copiedLocation) return;
+    setLatInput(Number(copiedLocation.lat).toFixed(6));
+    setLngInput(Number(copiedLocation.lng).toFixed(6));
+    if (copiedLocation.locationName) {
+      setCustomName(copiedLocation.locationName);
+    }
+  };
+
+  const handleSaveLocation = async () => {
+    const lat = parseFloat(latInput);
+    const lng = parseFloat(lngInput);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) {
+      alert("Por favor, informe coordenadas de Latitude e Longitude válidas.");
+      return;
+    }
+    if (onUpdateLocation) {
+      setIsSavingLocation(true);
+      try {
+        await onUpdateLocation(item, lat, lng, customName.trim() || undefined);
+        setIsEditingLocation(false);
+      } finally {
+        setIsSavingLocation(false);
+      }
     }
   };
 
@@ -213,15 +361,220 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
                 </span>
               </div>
 
-              <div className="flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-blue-600 shrink-0" />
-                <span>
-                  {item.outing_title
-                    ? `${item.outing_title}${item.city ? ` • ${item.city}` : ""}`
-                    : item.location_name ||
-                      (item.city ? `${item.city}, ${item.country}` : "Sem coordenadas GPS")}
-                </span>
-              </div>
+              {/* Location display & inline editor */}
+              {!isEditingLocation ? (
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2 min-w-0">
+                      <MapPin className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-slate-800 truncate">
+                          {item.location_name || item.outing_title || "Sem nome personalizado"}
+                        </p>
+                        <p className="text-[11px] text-slate-500 truncate">
+                          {item.city ? `${item.city}${item.country ? `, ${item.country}` : ""}` : "Coordenadas não definidas"}
+                        </p>
+                        {typeof item.latitude === "number" && typeof item.longitude === "number" && (
+                          <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                            {item.latitude.toFixed(6)}, {item.longitude.toFixed(6)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {typeof item.latitude === "number" && typeof item.longitude === "number" && (
+                        <button
+                          type="button"
+                          onClick={handleCopyLocation}
+                          title="Copiar coordenadas e local (Ctrl+C)"
+                          className={`p-1.5 rounded-lg border text-xs transition-colors cursor-pointer ${
+                            copiedFeedback
+                              ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+                              : "bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200"
+                          }`}
+                        >
+                          {copiedFeedback ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingLocation(true)}
+                        title="Editar coordenadas ou nome do local"
+                        className="p-1.5 rounded-lg bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 border border-slate-200 hover:border-blue-200 transition-colors cursor-pointer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick Paste Button if Copied Location Available */}
+                  {copiedLocation && (
+                    <button
+                      type="button"
+                      onClick={handlePasteLocation}
+                      className="w-full flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-50/70 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 text-[11px] font-medium transition-colors cursor-pointer"
+                      title="Colar coordenadas copiadas (Ctrl+V)"
+                    >
+                      <span className="flex items-center gap-1.5 truncate">
+                        <MapPin className="w-3 h-3 text-indigo-600 shrink-0" />
+                        <span className="truncate">
+                          Colar local: {copiedLocation.locationName || `${copiedLocation.lat.toFixed(4)}, ${copiedLocation.lng.toFixed(4)}`}
+                        </span>
+                      </span>
+                      <span className="text-[10px] text-indigo-500 font-mono shrink-0">Ctrl+V</span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-200/70 pb-2">
+                    <span className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
+                      <Edit3 className="w-3.5 h-3.5 text-blue-600" />
+                      Editar Localização
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingLocation(false)}
+                      className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Custom Location Name */}
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
+                      Nome do Ponto / Atração
+                    </label>
+                    <input
+                      type="text"
+                      value={customName}
+                      onChange={(e) => setCustomName(e.target.value)}
+                      placeholder="Ex: Cachoeira do Buracão, Mirante..."
+                      className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  {/* Search Nominatim */}
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
+                      Buscar Local / Endereço (OpenStreetMap)
+                    </label>
+                    <form onSubmit={handleSearchNominatim} className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Digite para buscar no mapa..."
+                        className="flex-1 px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-blue-500"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isSearching}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium shrink-0 cursor-pointer"
+                      >
+                        {isSearching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                      </button>
+                    </form>
+
+                    {searchResults.length > 0 && (
+                      <div className="mt-1.5 max-h-28 overflow-y-auto border border-slate-200 rounded-lg bg-white divide-y divide-slate-100 shadow-xs">
+                        {searchResults.map((r, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => handleSelectNominatim(r)}
+                            className="w-full p-2 text-left text-[11px] text-slate-700 hover:bg-blue-50 transition-colors block truncate cursor-pointer"
+                          >
+                            {r.display_name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Lat / Lng inputs */}
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
+                      Coordenadas (Graus Decimais)
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <span className="text-[10px] text-slate-400 block mb-0.5">Latitude:</span>
+                        <input
+                          type="text"
+                          value={latInput}
+                          onChange={(e) => setLatInput(e.target.value)}
+                          placeholder="-12.9714"
+                          className="w-full px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 font-mono focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 block mb-0.5">Longitude:</span>
+                        <input
+                          type="text"
+                          value={lngInput}
+                          onChange={(e) => setLngInput(e.target.value)}
+                          placeholder="-41.3412"
+                          className="w-full px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 font-mono focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Map pick & Memory paste shortcuts */}
+                  <div className="flex flex-col gap-1.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => onPickLocationOnMap && onPickLocationOnMap(item)}
+                      className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      <Crosshair className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Ajustar no Mapa Principal</span>
+                    </button>
+
+                    {copiedLocation && (
+                      <button
+                        type="button"
+                        onClick={handlePasteFromMemory}
+                        className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-medium transition-colors cursor-pointer"
+                      >
+                        <Copy className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Preencher da Memória ({copiedLocation.locationName || "Coordenadas"})</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Save / Cancel buttons */}
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingLocation(false)}
+                      className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-medium cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSavingLocation}
+                      onClick={handleSaveLocation}
+                      className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                    >
+                      {isSavingLocation ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Salvando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Salvar Local</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {(item.camera_make || item.camera_model) && (
                 <div className="flex items-center gap-2">

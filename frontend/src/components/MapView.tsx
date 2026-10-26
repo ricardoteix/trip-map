@@ -48,6 +48,8 @@ interface MapViewProps {
   showRoute: boolean;
   focusCoords?: { lat: number; lng: number; zoom?: number } | null;
   isPickingLocation: boolean;
+  pickLocationLabel?: string;
+  onCancelPickLocation?: () => void;
   onPickLocation: (lat: number, lng: number) => void;
   onSelectClusterMedia: (items: MediaItem[], title: string) => void;
   onOpenLightbox: (item: MediaItem) => void;
@@ -58,6 +60,8 @@ export const MapView: React.FC<MapViewProps> = ({
   showRoute,
   focusCoords,
   isPickingLocation,
+  pickLocationLabel,
+  onCancelPickLocation,
   onPickLocation,
   onSelectClusterMedia,
   onOpenLightbox,
@@ -348,9 +352,18 @@ export const MapView: React.FC<MapViewProps> = ({
 
       {/* Picking Location Banner */}
       {isPickingLocation && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2.5 px-4 py-2.5 rounded-full bg-blue-600 text-white text-sm font-medium shadow-lg animate-bounce">
-          <MapPin className="w-4 h-4" />
-          <span>Clique em qualquer ponto do mapa para definir a localização das fotos</span>
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2.5 px-4 py-2 rounded-full bg-blue-600 text-white text-xs font-semibold shadow-xl border border-blue-400/40 animate-pulse">
+          <MapPin className="w-4 h-4 shrink-0" />
+          <span>{pickLocationLabel || "Clique em qualquer ponto do mapa para definir a localização"}</span>
+          {onCancelPickLocation && (
+            <button
+              type="button"
+              onClick={onCancelPickLocation}
+              className="ml-1 px-2 py-0.5 rounded-full bg-white/20 hover:bg-white/30 text-white text-[11px] font-medium transition-colors cursor-pointer"
+            >
+              Cancelar
+            </button>
+          )}
         </div>
       )}
 

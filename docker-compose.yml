@@ -49,6 +49,9 @@ services:
       TRIP_MAX_DISTANCE_KM: ${TRIP_MAX_DISTANCE_KM:-85}
       FACE_SIMILARITY_THRESHOLD: ${FACE_SIMILARITY_THRESHOLD:-0.48}
       MODEL_CACHE_DIR: /model_cache
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3002/api/auth/google/callback}
     ports:
       - "${BACKEND_PORT:-8002}:8000"
     volumes:

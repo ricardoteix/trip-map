@@ -73,3 +73,18 @@
 - [x] 12.2 Add `GET /api/backup/export` and `POST /api/backup/import` endpoints in `backend/app/routers/trips.py` (or `backup.py`) and hook `MediaCurationCache` into `_ingest_single_file` in `backend/app/routers/media.py`
 - [x] 12.3 Build `BackupModal.tsx` and wire "Backup / Migrar" button in `App.tsx` and `frontend/src/api/client.ts`
 - [x] 12.4 Rebuild backend and frontend containers and verify `/api/backup/export` payload on the existing 890 curated Chapada Diamantina photos
+
+## 13. Google Drive Integration (Zero-Disk Originals & Multi-Account Import)
+
+- [x] 13.1 Add `GoogleAccount` model in `backend/app/models.py`, `storage_provider` / `gdrive_file_id` columns in `MediaItem`, and schema migrations in `backend/app/main.py`
+- [x] 13.2 Add Google Drive service and OAuth endpoints (`/api/gdrive/auth-url`, `/api/gdrive/callback`, `/api/gdrive/accounts`, `/api/gdrive/folders`, `/api/gdrive/sync-folder`, `/api/gdrive/stream/{media_id}`)
+- [x] 13.3 Build `GoogleDriveModal.tsx` in frontend and wire into top navigation bar
+- [x] 13.4 Rebuild containers and verify Google Drive OAuth and folder scanning flows
+
+## 14. Multi-User Authentication, Private Trips & Collaboration Invites
+
+- [x] 14.1 Add `User` and `TripMember` models in `backend/app/models.py`, add `owner_id`, `visibility` ("private" | "shared"), and `share_token` to `Trip`, and `uploaded_by_user_id` to `MediaItem`
+- [x] 14.2 Implement JWT / Cookie authentication middleware with Google OAuth user creation in `backend/app/routers/auth.py`, associate legacy trips/photos to first admin user
+- [x] 14.3 Add trip sharing and membership endpoints (`POST /api/trips/{id}/share`, `POST /api/trips/join/{token}`, `GET /api/trips/{id}/members`, `DELETE /api/trips/{id}/members/{user_id}`) and filter all media/timeline/trips by membership
+- [x] 14.4 Build `ShareTripModal.tsx`, user profile header button (Login/Logout) and wire invitation acceptance flow in frontend
+- [x] 14.5 Rebuild containers, test private vs shared trip visibility and collaborator upload flow

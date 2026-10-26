@@ -33,9 +33,22 @@ Inspirada na visualização geográfica do app **Fotos do iOS**, com **Tema Clar
 
 5. **Lightbox com Navegação Sequencial e Curadoria Rápida**
    - Navegue entre as fotos e vídeos da lista ativa sem fechar o modal usando os botões **Anterior (`‹`) / Próxima (`›`)** ou as setas do teclado (**`←`**, **`→`** e **`Esc`**), com contador de posição (`14 / 290`) e pré-carregamento (*preload*) automático das imagens vizinhas.
+   - **Edição e Correção de Localização (Geotagging Manual)**:
+     - Permite corrigir ou definir o local de qualquer foto individual ou em lote.
+     - **Copiar de outra foto**: Selecione visualmente outra foto da viagem para clonar as coordenadas exatas.
+     - **Localizar no mapa**: Clique interativamente no mapa para apontar o ponto exato.
+     - **Busca por endereço/atrativo**: Pesquise nomes de pontos turísticos ou cidades via geocodificação integrada.
+     - **Coordenadas diretas**: Insira manualmente Latitude e Longitude, além de definir nomes personalizados para o local.
    - **Exclusão Direta (Sem Lixeira)**: Exclua fotos individualmente ou em lote. Ao excluir dentro do Lightbox, ele avança automaticamente para a próxima foto. O hash `SHA-256` das mídias excluídas é salvo em `deleted_media_hashes` para que escaneamentos futuros da pasta `/import` jamais reimportem fotos descartadas.
 
-6. **Backup & Migração Portátil de Curadoria (Local ➔ Servidor)**
+6. **Autenticação Google OAuth, Privacidade & Viagens Compartilhadas**
+   - **Login seguro com Google**: Autenticação OAuth 2.0 moderna sem necessidade de infraestrutura própria de envio de e-mails para recuperação de senha.
+   - **Privacidade por Padrão**: Visitantes não autenticados ou anônimos não visualizam viagens ou fotos privadas.
+   - **Compartilhamento por Link Único**:
+     - Gere links de convite para amigos e familiares (`/join?token=...`).
+     - Membros convidados autenticados podem visualizar a viagem e contribuir enviando suas próprias fotos e vídeos para o mesmo álbum.
+
+7. **Backup & Migração Portátil de Curadoria (Local ➔ Servidor)**
    - Botão **"Backup / Migrar"** no topo da interface que exporta um arquivo leve (`tripmap-curation-backup.json`) contendo:
      - Todas as **Viagens** e **Passeios/Locais**;
      - Todas as **Pessoas nomeadas**, seus vetores faciais (`centroid_embedding`) e os avatares de rosto em Base64;
@@ -43,10 +56,11 @@ Inspirada na visualização geográfica do app **Fotos do iOS**, com **Tema Clar
      - Todos os **vínculos de curadoria por `SHA-256`** de cada foto (viagem, passeio, localização/cidade manual e rostos).
    - **Importação flexível no servidor**: Funciona tanto **antes** quanto **depois** de escanear a pasta `/import` no servidor (memorizando as regras na tabela `media_curation_cache` e aplicando-as automaticamente pelo `SHA-256` durante o escaneamento).
 
-7. **Ingestão Dupla (Upload Web + Scanner de Pasta Local `/import`) e Geotagging em Lote**
+8. **Ingestão Múltipla (Upload Web, Scanner `/import` e Google Drive)**
    - Suporte nativo a fotos (`.HEIC`, `.HEIF`, `.JPG`, `.PNG`, `.WEBP`) e vídeos (`.MOV`, `.MP4`) do iPhone 16 Plus e Samsung Galaxy S25.
    - Deduplicação automática via hash `SHA-256`.
-   - Filtro **"Sem GPS"** e atribuição manual de coordenadas em lote clicando no mapa ou buscando o nome do local.
+   - Filtro **"Sem GPS"** e atribuição manual de coordenadas em lote.
+   - Importação direta de pastas do **Google Drive** com sincronização transparente.
 
 ---
 
@@ -91,14 +105,17 @@ As portas externas foram configuradas para evitar conflitos com serviços comuns
 ### 1. Pré-requisitos
 - [Docker](https://www.docker.com/) e Docker Compose instalados.
 
-### 2. Configurar a pasta de fotos locais (Opcional)
+### 2. Configurar variáveis de ambiente (Opcional)
 Por padrão, o `docker-compose.yml` mapeia a pasta `./import_media` do projeto para `/import` no container.
-Você pode colocar suas fotos e vídeos do iPhone 16 Plus / Galaxy S25 dentro de `./import_media`, ou criar um arquivo `.env` apontando para qualquer pasta do seu computador/servidor:
+Você pode criar um arquivo `.env` para apontar para outra pasta de fotos e configurar o Google OAuth para login e compartilhamento seguro:
 
 ```bash
 cp .env.example .env
 ```
-Edite `LOCAL_IMPORT_HOST_PATH` no `.env` se desejar apontar para outro diretório.
+Variáveis principais no `.env`:
+- `LOCAL_IMPORT_HOST_PATH`: Caminho da sua pasta de fotos no host.
+- `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET`: Credenciais do Google Cloud Console para Login Social e Google Drive.
+- `SECRET_KEY`: Chave secreta para assinatura dos tokens JWT de sessão.
 
 ### 3. Subir todos os serviços
 Na raiz do repositório, execute:

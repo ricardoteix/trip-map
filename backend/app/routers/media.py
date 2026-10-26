@@ -20,7 +20,10 @@ from app.models import (
     Person,
     ScanJob,
     Trip,
+    TripMember,
+    User,
 )
+from app.routers.auth import get_accessible_trip_ids, get_current_user_optional
 from app.schemas import (
     AddPersonTagRequest,
     BatchAssignOutingRequest,
@@ -103,9 +106,15 @@ def serialize_media(item: MediaItem) -> MediaResponse:
         trip_id=item.trip_id,
         outing_id=item.outing_id,
         outing_title=item.outing.title if item.outing else None,
+        storage_provider=getattr(item, "storage_provider", "s3") or "s3",
+        gdrive_file_id=getattr(item, "gdrive_file_id", None),
         thumb_map_url=f"/api/storage/thumbnails-map/{item.thumb_map_key}",
         thumb_web_url=f"/api/storage/thumbnails-web/{item.thumb_web_key}",
-        original_url=f"/api/storage/originals/{item.original_key}",
+        original_url=(
+            f"/api/gdrive/stream/{item.id}"
+            if getattr(item, "storage_provider", "s3") == "gdrive"
+            else f"/api/storage/originals/{item.original_key}"
+        ),
         people=list(people_map.values()),
         faces=faces_list,
     )
@@ -117,6 +126,7 @@ def ingest_single_file(
     raw_bytes: bytes,
     fallback_dt: Optional[datetime] = None,
     respect_deleted_list: bool = False,
+    uploaded_by_user_id: Optional[str] = None,
 ) -> tuple[Optional[MediaItem], bool]:
     """
     Ingests a single media file into S3 and PostgreSQL.
@@ -192,6 +202,7 @@ def ingest_single_file(
         original_key=orig_key,
         thumb_map_key=map_key,
         thumb_web_key=web_key,
+        uploaded_by_user_id=uploaded_by_user_id,
     )
     db.add(media)
     db.flush()
@@ -289,11 +300,28 @@ def list_media(
     max_lng: Optional[float] = Query(None),
     search: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     query = db.query(MediaItem).options(
         joinedload(MediaItem.faces).joinedload(FaceDetection.person),
         joinedload(MediaItem.outing),
     )
+
+    accessible_ids = get_accessible_trip_ids(db, current_user)
+    if accessible_ids is not None:
+        if current_user:
+            if accessible_ids:
+                query = query.filter(
+                    (MediaItem.trip_id.in_(accessible_ids))
+                    | (MediaItem.uploaded_by_user_id == current_user.id)
+                )
+            else:
+                query = query.filter(MediaItem.uploaded_by_user_id == current_user.id)
+        else:
+            if accessible_ids:
+                query = query.filter(MediaItem.trip_id.in_(accessible_ids))
+            else:
+                return []
 
     if untagged_only:
         query = query.filter((MediaItem.latitude.is_(None)) | (MediaItem.longitude.is_(None)))
@@ -355,6 +383,7 @@ def _resolve_or_create_manual_trip(
     db: Session,
     trip_id: Optional[str] = None,
     trip_name: Optional[str] = None,
+    current_user: Optional[User] = None,
 ) -> Optional[Trip]:
     if trip_id:
         t = db.query(Trip).filter(Trip.id == trip_id).first()
@@ -376,9 +405,12 @@ def _resolve_or_create_manual_trip(
                 center_lng=-47.8828,
                 media_count=0,
                 is_manual=True,
+                owner_id=current_user.id if current_user else None,
             )
             db.add(t)
             db.flush()
+            if current_user:
+                db.add(TripMember(trip_id=t.id, user_id=current_user.id, role="owner"))
         else:
             t.is_manual = True
         return t
@@ -391,16 +423,24 @@ async def upload_media(
     trip_id: Optional[str] = Form(None),
     trip_name: Optional[str] = Form(None),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     ingested_items: list[MediaItem] = []
     any_new = False
-    target_trip = _resolve_or_create_manual_trip(db, trip_id=trip_id, trip_name=trip_name)
+    target_trip = _resolve_or_create_manual_trip(
+        db, trip_id=trip_id, trip_name=trip_name, current_user=current_user
+    )
 
     for upload in files:
         raw_bytes = await upload.read()
         if not raw_bytes:
             continue
-        item, is_new = ingest_single_file(db, upload.filename or "upload.jpg", raw_bytes)
+        item, is_new = ingest_single_file(
+            db,
+            upload.filename or "upload.jpg",
+            raw_bytes,
+            uploaded_by_user_id=current_user.id if current_user else None,
+        )
         if item is not None:
             if target_trip is not None:
                 item.trip_id = target_trip.id
@@ -644,6 +684,7 @@ def batch_assign_outing(
             affected_outing_ids.add(item.outing_id)
         if target_outing is not None:
             item.outing_id = target_outing.id
+            item.outing = target_outing
             item.is_manual_outing = True
             if target_outing.city:
                 item.city = target_outing.city
@@ -653,6 +694,7 @@ def batch_assign_outing(
             affected_outing_ids.add(target_outing.id)
         else:
             item.outing_id = None
+            item.outing = None
             item.is_manual_outing = False
 
     db.flush()
@@ -722,82 +764,6 @@ def batch_assign_trip(
     return [serialize_media(m) for m in updated]
 
 
-@router.patch("/media/batch-outing", response_model=list[MediaResponse])
-def batch_assign_outing(
-    payload: BatchAssignOutingRequest,
-    db: Session = Depends(get_db),
-):
-    if not payload.media_ids:
-        return []
-
-    target_outing: Optional[Outing] = None
-    if payload.outing_id:
-        target_outing = db.query(Outing).filter(Outing.id == payload.outing_id).first()
-        if target_outing:
-            target_outing.is_manual = True
-            if payload.city and payload.city.strip():
-                target_outing.city = payload.city.strip()
-    elif payload.new_outing_title and payload.new_outing_title.strip():
-        clean_title = payload.new_outing_title.strip()
-        clean_city = payload.city.strip() if payload.city and payload.city.strip() else None
-        target_outing = db.query(Outing).filter(Outing.title.ilike(clean_title)).first()
-        if not target_outing:
-            now = datetime.now(timezone.utc)
-            target_outing = Outing(
-                id=str(uuid4()),
-                trip_id=payload.trip_id,
-                title=clean_title,
-                city=clean_city,
-                start_date=now,
-                end_date=now,
-                center_lat=-12.8929,
-                center_lng=-41.2707,
-                media_count=0,
-                is_manual=True,
-            )
-            db.add(target_outing)
-            db.flush()
-        else:
-            target_outing.is_manual = True
-            if clean_city:
-                target_outing.city = clean_city
-
-    items = db.query(MediaItem).filter(MediaItem.id.in_(payload.media_ids)).all()
-    affected_outing_ids: set[str] = set()
-    for item in items:
-        if item.outing_id:
-            affected_outing_ids.add(item.outing_id)
-        if target_outing is not None:
-            item.outing_id = target_outing.id
-            item.is_manual_outing = True
-            if target_outing.city:
-                item.city = target_outing.city
-                item.location_name = f"{target_outing.title} • {target_outing.city}"
-            else:
-                item.location_name = target_outing.title
-            affected_outing_ids.add(target_outing.id)
-        else:
-            item.outing_id = None
-            item.is_manual_outing = False
-
-    db.flush()
-    for oid in affected_outing_ids:
-        o_obj = db.query(Outing).filter(Outing.id == oid).first()
-        if o_obj:
-            refresh_outing_summary(db, o_obj)
-
-    db.commit()
-
-    updated = (
-        db.query(MediaItem)
-        .options(
-            joinedload(MediaItem.faces).joinedload(FaceDetection.person),
-            joinedload(MediaItem.outing),
-        )
-        .filter(MediaItem.id.in_(payload.media_ids))
-        .all()
-    )
-    return [serialize_media(m) for m in updated]
 
 
 def _delete_media_items(db: Session, media_ids: list[str]) -> int:

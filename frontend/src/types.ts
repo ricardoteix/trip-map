@@ -39,6 +39,8 @@ export interface MediaItem {
   trip_id?: string | null;
   outing_id?: string | null;
   outing_title?: string | null;
+  storage_provider?: string;
+  gdrive_file_id?: string | null;
   thumb_map_url: string;
   thumb_web_url: string;
   original_url: string;
@@ -67,6 +69,40 @@ export interface Trip {
   cover_thumb_url?: string | null;
   media_count: number;
   is_manual?: boolean;
+  visibility?: "private" | "shared";
+  share_token?: string | null;
+  owner_id?: string | null;
+  user_role?: "owner" | "contributor" | "viewer" | null;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  picture?: string | null;
+  is_admin: boolean;
+}
+
+export interface AuthMeResponse {
+  authenticated: boolean;
+  user: User | null;
+}
+
+export interface TripMember {
+  id: string;
+  user_id: string;
+  email: string;
+  name: string;
+  picture?: string | null;
+  role: "owner" | "contributor" | "viewer";
+  joined_at: string;
+}
+
+export interface TripShareResponse {
+  trip_id: string;
+  visibility: "private" | "shared";
+  share_token?: string | null;
+  invite_url?: string | null;
 }
 
 export interface Outing {
@@ -112,4 +148,18 @@ export interface ScanStatus {
   imported_files: number;
   skipped_files: number;
   message?: string | null;
+}
+
+export interface GoogleAccount {
+  id: string;
+  email: string;
+  name?: string | null;
+  picture?: string | null;
+  created_at: string;
+}
+
+export interface GoogleDriveFolderItem {
+  id: string;
+  name: string;
+  mime_type: string;
 }

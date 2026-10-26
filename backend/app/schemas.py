@@ -47,6 +47,8 @@ class MediaResponse(BaseModel):
     trip_id: Optional[str] = None
     outing_id: Optional[str] = None
     outing_title: Optional[str] = None
+    storage_provider: str = "s3"
+    gdrive_file_id: Optional[str] = None
     thumb_map_url: str
     thumb_web_url: str
     original_url: str
@@ -154,6 +156,44 @@ class TripResponse(BaseModel):
     cover_thumb_url: Optional[str] = None
     media_count: int
     is_manual: bool = False
+    visibility: str = "private"
+    share_token: Optional[str] = None
+    owner_id: Optional[str] = None
+    user_role: Optional[str] = None
+
+
+class TripShareRequest(BaseModel):
+    visibility: str  # "private" | "shared"
+
+
+class TripShareResponse(BaseModel):
+    trip_id: str
+    visibility: str
+    share_token: Optional[str] = None
+    invite_url: Optional[str] = None
+
+
+class TripMemberResponse(BaseModel):
+    id: str
+    user_id: str
+    email: str
+    name: str
+    picture: Optional[str] = None
+    role: str
+    joined_at: datetime
+
+
+class UserBriefResponse(BaseModel):
+    id: str
+    email: str
+    name: str
+    picture: Optional[str] = None
+    is_admin: bool = False
+
+
+class AuthMeResponse(BaseModel):
+    authenticated: bool
+    user: Optional[UserBriefResponse] = None
 
 
 class TimelineBucket(BaseModel):
@@ -185,3 +225,25 @@ class ScanStatusResponse(BaseModel):
     imported_files: int
     skipped_files: int
     message: Optional[str] = None
+
+
+class GoogleAccountResponse(BaseModel):
+    id: str
+    email: str
+    name: Optional[str] = None
+    picture: Optional[str] = None
+    created_at: datetime
+
+
+class GoogleDriveFolderItem(BaseModel):
+    id: str
+    name: str
+    mime_type: str = "application/vnd.google-apps.folder"
+
+
+class GoogleDriveSyncRequest(BaseModel):
+    account_id: str
+    folder_id: str
+    folder_name: Optional[str] = None
+    trip_id: Optional[str] = None
+    trip_name: Optional[str] = None

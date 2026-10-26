@@ -1,8 +1,11 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import FaceDetection, Person
+from app.models import FaceDetection, MediaItem, Person, User
+from app.routers.auth import get_accessible_trip_ids, get_current_user_optional
 from app.schemas import PersonMergeRequest, PersonResponse, PersonUpdateRequest
 from app.services.face_service import face_service
 from app.services.storage import storage_service
@@ -24,12 +27,33 @@ def serialize_person(person: Person) -> PersonResponse:
 
 
 @router.get("", response_model=list[PersonResponse])
-def list_people(db: Session = Depends(get_db)):
-    people = (
-        db.query(Person)
-        .order_by(Person.is_named.desc(), Person.photo_count.desc(), Person.name.asc())
-        .all()
-    )
+def list_people(
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    accessible_ids = get_accessible_trip_ids(db, current_user)
+    if accessible_ids is not None:
+        user_id = current_user.id if current_user else None
+        if not user_id and not accessible_ids:
+            return []
+        filter_expr = MediaItem.trip_id.in_(accessible_ids) if accessible_ids else False
+        if user_id:
+            filter_expr = filter_expr | (MediaItem.uploaded_by_user_id == user_id)
+        people = (
+            db.query(Person)
+            .join(FaceDetection, FaceDetection.person_id == Person.id)
+            .join(MediaItem, MediaItem.id == FaceDetection.media_id)
+            .filter(filter_expr)
+            .distinct()
+            .order_by(Person.is_named.desc(), Person.photo_count.desc(), Person.name.asc())
+            .all()
+        )
+    else:
+        people = (
+            db.query(Person)
+            .order_by(Person.is_named.desc(), Person.photo_count.desc(), Person.name.asc())
+            .all()
+        )
     return [serialize_person(p) for p in people if (p.photo_count or 0) > 0 or p.is_named]
 
 
@@ -123,7 +147,9 @@ def _merge_people_clusters(db: Session, source: Person, target: Person) -> Perso
             db.delete(face)
         else:
             face.person_id = target.id
+            face.person = target
 
+    source.faces = []
     db.flush()
     db.delete(source)
     db.flush()

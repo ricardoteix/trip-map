@@ -1,10 +1,14 @@
 import {
+  AuthMeResponse,
   MediaItem,
   Outing,
   Person,
   ScanStatus,
   TimelineStats,
   Trip,
+  TripMember,
+  TripShareResponse,
+  User,
 } from "../types";
 
 export interface MediaFilterParams {
@@ -383,5 +387,127 @@ export async function importCurationBackup(file: File): Promise<BackupImportResu
   }
   return res.json();
 }
+
+export async function fetchGoogleAuthUrl(): Promise<string> {
+  const res = await fetch("/api/gdrive/auth-url");
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || "Falha ao obter URL de autenticação do Google");
+  }
+  const data = await res.json();
+  return data.url;
+}
+
+export async function fetchGoogleAccounts(): Promise<import("../types").GoogleAccount[]> {
+  const res = await fetch("/api/gdrive/accounts");
+  if (!res.ok) throw new Error("Falha ao buscar contas do Google");
+  return res.json();
+}
+
+export async function disconnectGoogleAccount(accountId: string): Promise<void> {
+  const res = await fetch(`/api/gdrive/accounts/${accountId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Falha ao desconectar conta");
+}
+
+export async function fetchDriveFolders(
+  accountId: string,
+  parentId?: string
+): Promise<import("../types").GoogleDriveFolderItem[]> {
+  const qs = new URLSearchParams({ account_id: accountId });
+  if (parentId) qs.set("parent_id", parentId);
+  const res = await fetch(`/api/gdrive/folders?${qs.toString()}`);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || "Falha ao listar pastas do Google Drive");
+  }
+  return res.json();
+}
+
+export async function triggerDriveFolderSync(options: {
+  accountId: string;
+  folderId: string;
+  folderName?: string;
+  tripId?: string;
+  tripName?: string;
+}): Promise<ScanStatus> {
+  const res = await fetch("/api/gdrive/sync-folder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      account_id: options.accountId,
+      folder_id: options.folderId,
+      folder_name: options.folderName || null,
+      trip_id: options.tripId || null,
+      trip_name: options.tripName || null,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || "Falha ao iniciar sincronização do Google Drive");
+  }
+  return res.json();
+}
+
+export async function fetchCurrentUser(): Promise<AuthMeResponse> {
+  const res = await fetch("/api/auth/me");
+  if (!res.ok) throw new Error("Falha ao obter status de autenticação");
+  return res.json();
+}
+
+export async function fetchLoginUrl(joinToken?: string): Promise<string> {
+  const qs = new URLSearchParams();
+  if (joinToken) qs.set("join_token", joinToken);
+  const res = await fetch(`/api/auth/google/login-url?${qs.toString()}`);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || "Falha ao obter URL de login Google");
+  }
+  const data = await res.json();
+  return data.url;
+}
+
+export async function logoutUser(): Promise<void> {
+  const res = await fetch("/api/auth/logout", { method: "POST" });
+  if (!res.ok) throw new Error("Falha ao deslogar");
+}
+
+export async function fetchTripShareInfo(tripId: string): Promise<TripShareResponse> {
+  const res = await fetch(`/api/trips/${tripId}/share`);
+  if (!res.ok) throw new Error("Falha ao carregar informações de compartilhamento");
+  return res.json();
+}
+
+export async function updateTripShareInfo(
+  tripId: string,
+  visibility: "private" | "shared"
+): Promise<TripShareResponse> {
+  const res = await fetch(`/api/trips/${tripId}/share`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visibility }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || "Falha ao atualizar compartilhamento da viagem");
+  }
+  return res.json();
+}
+
+export async function fetchTripMembers(tripId: string): Promise<TripMember[]> {
+  const res = await fetch(`/api/trips/${tripId}/members`);
+  if (!res.ok) throw new Error("Falha ao buscar membros da viagem");
+  return res.json();
+}
+
+export async function joinTripByToken(token: string): Promise<Trip> {
+  const res = await fetch(`/api/trips/join/${token}`, { method: "POST" });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || "Falha ao entrar na viagem");
+  }
+  return res.json();
+}
+
+
 
 

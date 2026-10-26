@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     face_similarity_threshold: float = 0.48
     seed_demo_on_startup: bool = False
 
+    # Google Drive OAuth Integration
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:3002/api/auth/google/callback"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

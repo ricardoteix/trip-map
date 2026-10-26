@@ -27,10 +27,14 @@ class Trip(Base):
     cover_media_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     media_count: Mapped[int] = mapped_column(Integer, default=0)
     is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    visibility: Mapped[str] = mapped_column(String(20), default="private")  # "private" | "shared"
+    share_token: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True, nullable=True)
+    owner_id: Mapped[Optional[str]] = mapped_column(String(36), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    media_items: Mapped[list["MediaItem"]] = relationship("MediaItem", back_populates="trip")
-    outings: Mapped[list["Outing"]] = relationship("Outing", back_populates="trip")
+    media_items: Mapped[list["MediaItem"]] = relationship("MediaItem", back_populates="trip", passive_deletes=True)
+    outings: Mapped[list["Outing"]] = relationship("Outing", back_populates="trip", passive_deletes=True)
+    members: Mapped[list["TripMember"]] = relationship("TripMember", back_populates="trip", cascade="all, delete-orphan")
 
 
 class Outing(Base):
@@ -52,7 +56,7 @@ class Outing(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     trip: Mapped[Optional["Trip"]] = relationship("Trip", back_populates="outings")
-    media_items: Mapped[list["MediaItem"]] = relationship("MediaItem", back_populates="outing")
+    media_items: Mapped[list["MediaItem"]] = relationship("MediaItem", back_populates="outing", passive_deletes=True)
 
 
 class MediaItem(Base):
@@ -90,6 +94,11 @@ class MediaItem(Base):
     thumb_map_key: Mapped[str] = mapped_column(String(512), nullable=False)
     thumb_web_key: Mapped[str] = mapped_column(String(512), nullable=False)
 
+    # Storage provider: 's3' or 'gdrive'
+    storage_provider: Mapped[str] = mapped_column(String(32), default="s3")
+    gdrive_file_id: Mapped[Optional[str]] = mapped_column(String(128), index=True, nullable=True)
+    gdrive_account_id: Mapped[Optional[str]] = mapped_column(String(36), index=True, nullable=True)
+
     # Trip & Outing (Passeio/Local) association
     trip_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("trips.id", ondelete="SET NULL"), index=True, nullable=True
@@ -102,6 +111,9 @@ class MediaItem(Base):
     )
     is_manual_outing: Mapped[bool] = mapped_column(Boolean, default=False)
     outing: Mapped[Optional["Outing"]] = relationship("Outing", back_populates="media_items")
+
+    # Contributor tracking
+    uploaded_by_user_id: Mapped[Optional[str]] = mapped_column(String(36), index=True, nullable=True)
 
     # Detected faces
     faces: Mapped[list["FaceDetection"]] = relationship(
@@ -120,7 +132,7 @@ class Person(Base):
     photo_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    faces: Mapped[list["FaceDetection"]] = relationship("FaceDetection", back_populates="person")
+    faces: Mapped[list["FaceDetection"]] = relationship("FaceDetection", back_populates="person", passive_deletes=True)
 
 
 class FaceDetection(Base):
@@ -183,3 +195,42 @@ class MediaCurationCache(Base):
     is_manual_location: Mapped[bool] = mapped_column(Boolean, default=False)
     faces_json: Mapped[Optional[list[dict]]] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GoogleAccount(Base):
+    __tablename__ = "google_accounts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    picture: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    token_expiry: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    picture: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    memberships: Mapped[list["TripMember"]] = relationship("TripMember", back_populates="user", cascade="all, delete-orphan")
+
+
+class TripMember(Base):
+    __tablename__ = "trip_members"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    trip_id: Mapped[str] = mapped_column(String(36), ForeignKey("trips.id", ondelete="CASCADE"), index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), default="viewer")  # "owner" | "contributor" | "viewer"
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    trip: Mapped["Trip"] = relationship("Trip", back_populates="members")
+    user: Mapped["User"] = relationship("User", back_populates="memberships")
