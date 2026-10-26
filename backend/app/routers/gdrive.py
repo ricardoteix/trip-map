@@ -404,15 +404,38 @@ def _run_gdrive_folder_sync(
         with httpx.Client(timeout=90.0) as client:
             for idx, df in enumerate(all_drive_files):
                 try:
-                    fname = df["name"]
+                    fname = df.get("name", "")
                     ext = Path(fname).suffix.lower()
                     if ext not in SUPPORTED_EXTENSIONS:
                         skipped += 1
                         job.processed_files = idx + 1
                         job.skipped_files = skipped
+                        if (idx + 1) % 5 == 0 or (idx + 1) == len(all_drive_files):
+                            job.message = f"Processando {idx + 1}/{len(all_drive_files)} arquivos ({imported} importados, {skipped} pulados)..."
+                            db.commit()
                         continue
 
-                    file_id = df["id"]
+                    file_id = df.get("id")
+                    if not file_id:
+                        skipped += 1
+                        job.processed_files = idx + 1
+                        job.skipped_files = skipped
+                        continue
+
+                    # 1. Skip immediately without downloading if Google Drive file is already registered
+                    already_imported = (
+                        db.query(MediaItem.id)
+                        .filter(MediaItem.gdrive_file_id == file_id)
+                        .first()
+                    )
+                    if already_imported:
+                        skipped += 1
+                        job.processed_files = idx + 1
+                        job.skipped_files = skipped
+                        if (idx + 1) % 5 == 0 or (idx + 1) == len(all_drive_files):
+                            job.message = f"Processando {idx + 1}/{len(all_drive_files)} arquivos ({imported} importados, {skipped} pulados)..."
+                            db.commit()
+                        continue
 
                     # Download with retries, exponential backoff, and automatic token refresh
                     raw_bytes = None
@@ -451,24 +474,36 @@ def _run_gdrive_folder_sync(
                         skipped += 1
                         job.processed_files = idx + 1
                         job.skipped_files = skipped
+                        if (idx + 1) % 5 == 0 or (idx + 1) == len(all_drive_files):
+                            job.message = f"Processando {idx + 1}/{len(all_drive_files)} arquivos ({imported} importados, {skipped} pulados)..."
+                            db.commit()
                         continue
 
                     sha = compute_sha256(raw_bytes)
 
                     # Check if deleted
-                    was_deleted = db.query(DeletedMediaHash).filter(DeletedMediaHash.sha256 == sha).first()
+                    was_deleted = db.query(DeletedMediaHash.id).filter(DeletedMediaHash.sha256 == sha).first()
                     if was_deleted:
                         skipped += 1
                         job.processed_files = idx + 1
                         job.skipped_files = skipped
+                        if (idx + 1) % 5 == 0 or (idx + 1) == len(all_drive_files):
+                            job.message = f"Processando {idx + 1}/{len(all_drive_files)} arquivos ({imported} importados, {skipped} pulados)..."
+                            db.commit()
                         continue
 
-                    # Check existing
+                    # Check existing by sha256 (e.g. uploaded previously via web or local folder)
                     existing = db.query(MediaItem).filter(MediaItem.sha256 == sha).first()
                     if existing:
+                        if not existing.gdrive_file_id:
+                            existing.gdrive_file_id = file_id
+                            existing.gdrive_account_id = account_id
                         skipped += 1
                         job.processed_files = idx + 1
                         job.skipped_files = skipped
+                        if (idx + 1) % 5 == 0 or (idx + 1) == len(all_drive_files):
+                            job.message = f"Processando {idx + 1}/{len(all_drive_files)} arquivos ({imported} importados, {skipped} pulados)..."
+                            db.commit()
                         continue
 
                     media_id = str(uuid4())
@@ -542,24 +577,37 @@ def _run_gdrive_folder_sync(
                     imported += 1
                     job.processed_files = idx + 1
                     job.imported_files = imported
-                    if (idx + 1) % 10 == 0:
-                        db.commit()
+                    job.skipped_files = skipped
+                    job.message = f"Processando {idx + 1}/{len(all_drive_files)} arquivos ({imported} importados, {skipped} pulados)..."
+                    db.commit()
                 except Exception as file_exc:
                     print(f"[GDrive Sync] Erro no processamento de {df.get('name')}: {file_exc}")
+                    db.rollback()
                     skipped += 1
-                    job.processed_files = idx + 1
-                    job.skipped_files = skipped
-                    db.commit()
+                    job = db.query(ScanJob).filter(ScanJob.id == job_id).first()
+                    if job:
+                        job.processed_files = idx + 1
+                        job.skipped_files = skipped
+                        job.message = f"Processando {idx + 1}/{len(all_drive_files)} arquivos ({imported} importados, {skipped} pulados)..."
+                        db.commit()
 
         rebuild_trips(db)
-        job.status = "completed"
-        job.message = f"Concluído: {imported} importados do Google Drive, {skipped} pulados."
-        db.commit()
+        job = db.query(ScanJob).filter(ScanJob.id == job_id).first()
+        if job:
+            job.status = "completed"
+            job.message = f"Concluído: {imported} importados do Google Drive, {skipped} pulados."
+            db.commit()
 
     except Exception as exc:
-        job.status = "failed"
-        job.message = f"Erro ao sincronizar do Google Drive: {exc}"
-        db.commit()
+        try:
+            db.rollback()
+            job = db.query(ScanJob).filter(ScanJob.id == job_id).first()
+            if job:
+                job.status = "failed"
+                job.message = f"Erro ao sincronizar do Google Drive: {exc}"
+                db.commit()
+        except Exception as commit_err:
+            print(f"[GDrive Sync] Erro ao registrar falha do job: {commit_err}")
     finally:
         db.close()
 
