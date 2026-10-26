@@ -49,6 +49,8 @@ import { BatchOutingModal } from "./components/BatchOutingModal";
 import { BatchTripModal } from "./components/BatchTripModal";
 import { GalleryDrawer } from "./components/GalleryDrawer";
 import { GoogleDriveModal } from "./components/GoogleDriveModal";
+import { HomeLanding } from "./components/HomeLanding";
+import logoImg from "../assets/logo.png";
 import { CopiedLocation, LightboxModal } from "./components/LightboxModal";
 import { MapView } from "./components/MapView";
 import { OutingsBar } from "./components/OutingsBar";
@@ -110,6 +112,7 @@ export const App: React.FC = () => {
 
   // User Authentication & Sharing State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [avatarError, setAvatarError] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [sharingTrip, setSharingTrip] = useState<Trip | null>(null);
@@ -124,6 +127,8 @@ export const App: React.FC = () => {
     } catch {
       setCurrentUser(null);
       return null;
+    } finally {
+      setIsAuthLoading(false);
     }
   }, []);
 
@@ -527,6 +532,35 @@ export const App: React.FC = () => {
   };
 
   const displayedGalleryMedia = clusterOverrideMedia ?? media;
+
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen w-full bg-slate-50 flex flex-col items-center justify-center p-4 select-none">
+        <img
+          src={logoImg}
+          alt="TripMap"
+          className="w-20 h-20 object-contain animate-pulse mb-3 drop-shadow-sm"
+        />
+        <p className="text-xs text-slate-500 font-semibold tracking-wide">Carregando TripMap...</p>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <HomeLanding
+        onLogin={handleLogin}
+        inviteNotice={
+          inviteNotice
+            ? {
+                token: inviteNotice.token,
+                tripTitle: "Viagem Compartilhada",
+              }
+            : null
+        }
+      />
+    );
+  }
 
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-50 text-slate-900 overflow-hidden">

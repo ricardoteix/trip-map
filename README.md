@@ -41,11 +41,13 @@ Inspirada na visualização geográfica do app **Fotos do iOS**, com **Tema Clar
      - **Coordenadas diretas**: Insira manualmente Latitude e Longitude, além de definir nomes personalizados para o local.
    - **Exclusão Direta (Sem Lixeira)**: Exclua fotos individualmente ou em lote. Ao excluir dentro do Lightbox, ele avança automaticamente para a próxima foto. O hash `SHA-256` das mídias excluídas é salvo em `deleted_media_hashes` para que escaneamentos futuros da pasta `/import` jamais reimportem fotos descartadas.
 
-6. **Autenticação Google OAuth, Privacidade & Viagens Compartilhadas**
+6. **Tela de Entrada (Home / Landing), Autenticação Google OAuth & Privacidade**
+   - **Home de Boas-Vindas Exclusiva**: Visitantes não autenticados são recepcionados por uma tela inicial elegante com a logo oficial, proposta de valor e botão destacado de login via Google, mantendo o mapa e as ferramentas protegidos até a autenticação.
    - **Login seguro com Google**: Autenticação OAuth 2.0 moderna sem necessidade de infraestrutura própria de envio de e-mails para recuperação de senha.
-   - **Privacidade por Padrão**: Visitantes não autenticados ou anônimos não visualizam viagens ou fotos privadas.
-   - **Compartilhamento por Link Único**:
+   - **Privacidade por Padrão**: Viagens e fotos privadas só podem ser acessadas por seu proprietário ou por membros autorizados.
+   - **Compartilhamento por Link Único & Convites**:
      - Gere links de convite para amigos e familiares (`/join?token=...`).
+     - A tela de Home reconhece o convite automaticamente e apresenta um card contextualizado convidando a fazer login para participar e colaborar.
      - Membros convidados autenticados podem visualizar a viagem e contribuir enviando suas próprias fotos e vídeos para o mesmo álbum.
 
 7. **Backup & Migração Portátil de Curadoria (Local ➔ Servidor)**
