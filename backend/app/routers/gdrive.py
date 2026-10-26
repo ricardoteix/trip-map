@@ -265,11 +265,46 @@ def _run_gdrive_folder_sync(
     trip_name: Optional[str] = None,
 ):
     """Background task that downloads images into memory, creates WebP thumbnails, and keeps originals on Drive."""
+    import time
     db = SessionLocal()
     job = db.query(ScanJob).filter(ScanJob.id == job_id).first()
     if not job:
         db.close()
         return
+
+    def get_fresh_token(force: bool = False) -> str:
+        acc_local = db.query(GoogleAccount).filter(GoogleAccount.id == account_id).first()
+        if not acc_local:
+            return ""
+        now = datetime.now(timezone.utc)
+        needs_refresh = (
+            force
+            or not acc_local.token_expiry
+            or (acc_local.token_expiry - now).total_seconds() < 300
+        )
+        if needs_refresh and acc_local.refresh_token:
+            try:
+                with httpx.Client(timeout=20.0) as ref_client:
+                    ref_res = ref_client.post(
+                        GOOGLE_TOKEN_URL,
+                        data={
+                            "client_id": settings.google_client_id,
+                            "client_secret": settings.google_client_secret,
+                            "refresh_token": acc_local.refresh_token,
+                            "grant_type": "refresh_token",
+                        },
+                    )
+                    if ref_res.status_code == 200:
+                        t_data = ref_res.json()
+                        acc_local.access_token = t_data["access_token"]
+                        exp_in = t_data.get("expires_in", 3600)
+                        acc_local.token_expiry = datetime.fromtimestamp(
+                            now.timestamp() + exp_in, tz=timezone.utc
+                        )
+                        db.commit()
+            except Exception as ref_err:
+                print(f"[GDrive Sync] Erro ao renovar token: {ref_err}")
+        return acc_local.access_token
 
     try:
         acc = db.query(GoogleAccount).filter(GoogleAccount.id == account_id).first()
@@ -279,8 +314,7 @@ def _run_gdrive_folder_sync(
             db.commit()
             return
 
-        import asyncio
-        token = asyncio.run(_get_valid_access_token(acc, db))
+        token = get_fresh_token()
 
         # Recursively discover all subfolders inside the selected folder
         job.message = "Mapeando pastas e subpastas no Google Drive..."
@@ -306,6 +340,9 @@ def _run_gdrive_folder_sync(
                         headers={"Authorization": f"Bearer {token}"},
                         params=sub_params,
                     )
+                    if res_sub.status_code == 401:
+                        token = get_fresh_token(force=True)
+                        continue
                     if res_sub.status_code != 200:
                         break
                     sub_data = res_sub.json()
@@ -338,6 +375,9 @@ def _run_gdrive_folder_sync(
                         headers={"Authorization": f"Bearer {token}"},
                         params=file_params,
                     )
+                    if res.status_code == 401:
+                        token = get_fresh_token(force=True)
+                        continue
                     if res.status_code != 200:
                         break
                     data = res.json()
@@ -361,118 +401,155 @@ def _run_gdrive_folder_sync(
         uploader_user = db.query(User).filter(User.email == acc.email).first()
         uploader_id = uploader_user.id if uploader_user else None
 
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=90.0) as client:
             for idx, df in enumerate(all_drive_files):
-                fname = df["name"]
-                ext = Path(fname).suffix.lower()
-                if ext not in SUPPORTED_EXTENSIONS:
+                try:
+                    fname = df["name"]
+                    ext = Path(fname).suffix.lower()
+                    if ext not in SUPPORTED_EXTENSIONS:
+                        skipped += 1
+                        job.processed_files = idx + 1
+                        job.skipped_files = skipped
+                        continue
+
+                    file_id = df["id"]
+
+                    # Download with retries, exponential backoff, and automatic token refresh
+                    raw_bytes = None
+                    for attempt in range(4):
+                        cur_token = get_fresh_token()
+                        download_url = (
+                            f"{GOOGLE_DRIVE_API_BASE}/files/{file_id}"
+                            f"?alt=media&acknowledgeAbuse=true&supportsAllDrives=true"
+                        )
+                        down_res = client.get(
+                            download_url,
+                            headers={"Authorization": f"Bearer {cur_token}"},
+                        )
+                        if down_res.status_code == 200:
+                            raw_bytes = down_res.content
+                            break
+                        elif down_res.status_code == 401:
+                            # Token expired - force immediate refresh
+                            get_fresh_token(force=True)
+                            time.sleep(1)
+                        elif down_res.status_code in [403, 429, 500, 503]:
+                            # Rate limit or temporary service issue - backoff
+                            sleep_sec = 2 * (attempt + 1)
+                            print(
+                                f"[GDrive Sync] Rate limit/HTTP {down_res.status_code} em {fname}. "
+                                f"Aguardando {sleep_sec}s (tentativa {attempt + 1}/4)..."
+                            )
+                            time.sleep(sleep_sec)
+                        else:
+                            print(
+                                f"[GDrive Sync] Erro HTTP {down_res.status_code} ao baixar {fname} ({file_id}): {down_res.text[:120]}"
+                            )
+                            break
+
+                    if not raw_bytes:
+                        skipped += 1
+                        job.processed_files = idx + 1
+                        job.skipped_files = skipped
+                        continue
+
+                    sha = compute_sha256(raw_bytes)
+
+                    # Check if deleted
+                    was_deleted = db.query(DeletedMediaHash).filter(DeletedMediaHash.sha256 == sha).first()
+                    if was_deleted:
+                        skipped += 1
+                        job.processed_files = idx + 1
+                        job.skipped_files = skipped
+                        continue
+
+                    # Check existing
+                    existing = db.query(MediaItem).filter(MediaItem.sha256 == sha).first()
+                    if existing:
+                        skipped += 1
+                        job.processed_files = idx + 1
+                        job.skipped_files = skipped
+                        continue
+
+                    media_id = str(uuid4())
+                    is_video = ext in VIDEO_EXTENSIONS
+                    media_type = "video" if is_video else "image"
+                    mime_type = df.get("mimeType") or mimetypes.guess_type(fname)[0] or "image/jpeg"
+
+                    map_key = f"{media_id}_map.webp"
+                    web_key = f"{media_id}_web.webp"
+                    orig_key = f"gdrive_{file_id}"  # Virtual S3 key referencing Google Drive
+
+                    pil_img = None
+                    if is_video:
+                        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                            tmp.write(raw_bytes)
+                            tmp_path = Path(tmp.name)
+                        try:
+                            meta = extract_video_metadata(tmp_path)
+                            map_bytes, web_bytes = generate_video_thumbnails(tmp_path)
+                        finally:
+                            tmp_path.unlink(missing_ok=True)
+                    else:
+                        meta = extract_image_metadata(raw_bytes)
+                        map_bytes, web_bytes, pil_img = generate_image_thumbnails(raw_bytes)
+
+                    # Save ONLY thumbnails locally/S3 - ORIGINALS REMAIN ON GOOGLE DRIVE!
+                    storage_service.put_bytes("thumbnails-map", map_key, map_bytes, "image/webp")
+                    storage_service.put_bytes("thumbnails-web", web_key, web_bytes, "image/webp")
+
+                    city, country, loc_name = resolve_city_country(meta.get("latitude"), meta.get("longitude"))
+
+                    media = MediaItem(
+                        id=media_id,
+                        sha256=sha,
+                        filename=fname,
+                        media_type=media_type,
+                        mime_type=mime_type,
+                        file_size=len(raw_bytes),
+                        width=meta.get("width"),
+                        height=meta.get("height"),
+                        duration_sec=meta.get("duration_sec"),
+                        camera_make=meta.get("camera_make"),
+                        camera_model=meta.get("camera_model"),
+                        taken_at=meta.get("taken_at") or datetime.now(timezone.utc),
+                        latitude=meta.get("latitude"),
+                        longitude=meta.get("longitude"),
+                        altitude=meta.get("altitude"),
+                        location_name=loc_name,
+                        city=city,
+                        country=country,
+                        original_key=orig_key,
+                        thumb_map_key=map_key,
+                        thumb_web_key=web_key,
+                        storage_provider="gdrive",
+                        gdrive_file_id=file_id,
+                        gdrive_account_id=account_id,
+                        trip_id=target_trip.id if target_trip else None,
+                        is_manual_trip=bool(target_trip),
+                        uploaded_by_user_id=uploader_id,
+                    )
+                    db.add(media)
+                    db.flush()
+
+                    from app.models import MediaCurationCache
+                    cached = db.query(MediaCurationCache).filter(MediaCurationCache.sha256 == sha).first()
+                    if cached is not None:
+                        apply_curation_to_media_item(db, media, cached, pil_img=pil_img)
+                    elif pil_img is not None:
+                        face_service.detect_and_cluster_faces(db, media, pil_img)
+
+                    imported += 1
+                    job.processed_files = idx + 1
+                    job.imported_files = imported
+                    if (idx + 1) % 10 == 0:
+                        db.commit()
+                except Exception as file_exc:
+                    print(f"[GDrive Sync] Erro no processamento de {df.get('name')}: {file_exc}")
                     skipped += 1
                     job.processed_files = idx + 1
                     job.skipped_files = skipped
-                    continue
-
-                file_id = df["id"]
-
-                # Download file bytes into memory
-                down_res = client.get(
-                    f"{GOOGLE_DRIVE_API_BASE}/files/{file_id}?alt=media",
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-                if down_res.status_code != 200:
-                    skipped += 1
-                    continue
-
-                raw_bytes = down_res.content
-                sha = compute_sha256(raw_bytes)
-
-                # Check if deleted
-                was_deleted = db.query(DeletedMediaHash).filter(DeletedMediaHash.sha256 == sha).first()
-                if was_deleted:
-                    skipped += 1
-                    job.processed_files = idx + 1
-                    job.skipped_files = skipped
-                    continue
-
-                # Check existing
-                existing = db.query(MediaItem).filter(MediaItem.sha256 == sha).first()
-                if existing:
-                    skipped += 1
-                    job.processed_files = idx + 1
-                    job.skipped_files = skipped
-                    continue
-
-                media_id = str(uuid4())
-                is_video = ext in VIDEO_EXTENSIONS
-                media_type = "video" if is_video else "image"
-                mime_type = df.get("mimeType") or mimetypes.guess_type(fname)[0] or "image/jpeg"
-
-                map_key = f"{media_id}_map.webp"
-                web_key = f"{media_id}_web.webp"
-                orig_key = f"gdrive_{file_id}"  # Virtual S3 key referencing Google Drive
-
-                pil_img = None
-                if is_video:
-                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-                        tmp.write(raw_bytes)
-                        tmp_path = Path(tmp.name)
-                    try:
-                        meta = extract_video_metadata(tmp_path)
-                        map_bytes, web_bytes = generate_video_thumbnails(tmp_path)
-                    finally:
-                        tmp_path.unlink(missing_ok=True)
-                else:
-                    meta = extract_image_metadata(raw_bytes)
-                    map_bytes, web_bytes, pil_img = generate_image_thumbnails(raw_bytes)
-
-                # Save ONLY thumbnails locally/S3 - ORIGINALS REMAIN ON GOOGLE DRIVE!
-                storage_service.put_bytes("thumbnails-map", map_key, map_bytes, "image/webp")
-                storage_service.put_bytes("thumbnails-web", web_key, web_bytes, "image/webp")
-
-                city, country, loc_name = resolve_city_country(meta.get("latitude"), meta.get("longitude"))
-
-                media = MediaItem(
-                    id=media_id,
-                    sha256=sha,
-                    filename=fname,
-                    media_type=media_type,
-                    mime_type=mime_type,
-                    file_size=len(raw_bytes),
-                    width=meta.get("width"),
-                    height=meta.get("height"),
-                    duration_sec=meta.get("duration_sec"),
-                    camera_make=meta.get("camera_make"),
-                    camera_model=meta.get("camera_model"),
-                    taken_at=meta.get("taken_at") or datetime.now(timezone.utc),
-                    latitude=meta.get("latitude"),
-                    longitude=meta.get("longitude"),
-                    altitude=meta.get("altitude"),
-                    location_name=loc_name,
-                    city=city,
-                    country=country,
-                    original_key=orig_key,
-                    thumb_map_key=map_key,
-                    thumb_web_key=web_key,
-                    storage_provider="gdrive",
-                    gdrive_file_id=file_id,
-                    gdrive_account_id=account_id,
-                    trip_id=target_trip.id if target_trip else None,
-                    is_manual_trip=bool(target_trip),
-                    uploaded_by_user_id=uploader_id,
-                )
-                db.add(media)
-                db.flush()
-
-                from app.models import MediaCurationCache
-                cached = db.query(MediaCurationCache).filter(MediaCurationCache.sha256 == sha).first()
-                if cached is not None:
-                    apply_curation_to_media_item(db, media, cached, pil_img=pil_img)
-                elif pil_img is not None:
-                    face_service.detect_and_cluster_faces(db, media, pil_img)
-
-                imported += 1
-                job.processed_files = idx + 1
-                job.imported_files = imported
-                db.commit()
+                    db.commit()
 
         rebuild_trips(db)
         job.status = "completed"
