@@ -58,11 +58,11 @@ Inspirada na visualização geográfica do app **Fotos do iOS**, com **Tema Clar
      - Todos os **vínculos de curadoria por `SHA-256`** de cada foto (viagem, passeio, localização/cidade manual e rostos).
    - **Importação flexível no servidor**: Funciona tanto **antes** quanto **depois** de escanear a pasta `/import` no servidor (memorizando as regras na tabela `media_curation_cache` e aplicando-as automaticamente pelo `SHA-256` durante o escaneamento).
 
-8. **Ingestão Múltipla (Upload Web, Scanner `/import` e Google Drive)**
+8. **Ingestão Múltipla (Upload Web, Scanner `/import` e Google Drive Recursivo)**
    - Suporte nativo a fotos (`.HEIC`, `.HEIF`, `.JPG`, `.PNG`, `.WEBP`) e vídeos (`.MOV`, `.MP4`) do iPhone 16 Plus e Samsung Galaxy S25.
    - Deduplicação automática via hash `SHA-256`.
    - Filtro **"Sem GPS"** e atribuição manual de coordenadas em lote.
-   - Importação direta de pastas do **Google Drive** com sincronização transparente.
+   - **Google Drive com Varredura Recursiva**: Sincronização direta de pastas do Google Drive com descoberta automática de todas as subpastas aninhadas, gerando miniaturas leves e aplicando regras de curadoria restauradas por `SHA-256`.
 
 ---
 

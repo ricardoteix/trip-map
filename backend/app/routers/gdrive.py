@@ -282,30 +282,69 @@ def _run_gdrive_folder_sync(
         import asyncio
         token = asyncio.run(_get_valid_access_token(acc, db))
 
-        # Query files inside the selected folder
-        q = f"'{folder_id}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'"
-        params = {
-            "q": q,
-            "fields": "nextPageToken, files(id, name, mimeType, size, createdTime, md5Checksum)",
-            "pageSize": 500,
-        }
+        # Recursively discover all subfolders inside the selected folder
+        job.message = "Mapeando pastas e subpastas no Google Drive..."
+        db.commit()
 
-        all_drive_files = []
+        folders_to_check = [folder_id]
+        all_folder_ids = [folder_id]
+
         with httpx.Client(timeout=30.0) as client:
-            while True:
-                res = client.get(
-                    f"{GOOGLE_DRIVE_API_BASE}/files",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params=params,
-                )
-                if res.status_code != 200:
-                    break
-                data = res.json()
-                all_drive_files.extend(data.get("files", []))
-                page_token = data.get("nextPageToken")
-                if not page_token:
-                    break
-                params["pageToken"] = page_token
+            while folders_to_check:
+                current_parent_id = folders_to_check.pop(0)
+                sub_token = None
+                while True:
+                    sub_params = {
+                        "q": f"'{current_parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+                        "fields": "nextPageToken, files(id, name)",
+                        "pageSize": 100,
+                    }
+                    if sub_token:
+                        sub_params["pageToken"] = sub_token
+                    res_sub = client.get(
+                        f"{GOOGLE_DRIVE_API_BASE}/files",
+                        headers={"Authorization": f"Bearer {token}"},
+                        params=sub_params,
+                    )
+                    if res_sub.status_code != 200:
+                        break
+                    sub_data = res_sub.json()
+                    for sf in sub_data.get("files", []):
+                        sf_id = sf["id"]
+                        if sf_id not in all_folder_ids:
+                            all_folder_ids.append(sf_id)
+                            folders_to_check.append(sf_id)
+                    sub_token = sub_data.get("nextPageToken")
+                    if not sub_token:
+                        break
+
+            job.message = f"Pastas mapeadas ({len(all_folder_ids)} pastas). Buscando fotos e vídeos..."
+            db.commit()
+
+            # Query files across all discovered folders
+            all_drive_files = []
+            for fid in all_folder_ids:
+                page_token = None
+                while True:
+                    file_params = {
+                        "q": f"'{fid}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'",
+                        "fields": "nextPageToken, files(id, name, mimeType, size, createdTime, md5Checksum)",
+                        "pageSize": 500,
+                    }
+                    if page_token:
+                        file_params["pageToken"] = page_token
+                    res = client.get(
+                        f"{GOOGLE_DRIVE_API_BASE}/files",
+                        headers={"Authorization": f"Bearer {token}"},
+                        params=file_params,
+                    )
+                    if res.status_code != 200:
+                        break
+                    data = res.json()
+                    all_drive_files.extend(data.get("files", []))
+                    page_token = data.get("nextPageToken")
+                    if not page_token:
+                        break
 
         job.total_files = len(all_drive_files)
         job.message = f"Processando {len(all_drive_files)} arquivos do Google Drive..."
@@ -317,6 +356,10 @@ def _run_gdrive_folder_sync(
         # Resolve or create Trip if trip_name given
         from app.routers.media import _resolve_or_create_manual_trip
         target_trip = _resolve_or_create_manual_trip(db, trip_id=trip_id, trip_name=trip_name)
+
+        from app.models import User
+        uploader_user = db.query(User).filter(User.email == acc.email).first()
+        uploader_id = uploader_user.id if uploader_user else None
 
         with httpx.Client(timeout=60.0) as client:
             for idx, df in enumerate(all_drive_files):
@@ -414,6 +457,7 @@ def _run_gdrive_folder_sync(
                     gdrive_account_id=account_id,
                     trip_id=target_trip.id if target_trip else None,
                     is_manual_trip=bool(target_trip),
+                    uploaded_by_user_id=uploader_id,
                 )
                 db.add(media)
                 db.flush()
