@@ -1,6 +1,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -34,19 +35,25 @@ def list_people(
     accessible_ids = get_accessible_trip_ids(db, current_user)
     if accessible_ids is not None:
         user_id = current_user.id if current_user else None
-        if not user_id and not accessible_ids:
-            return []
-        filter_expr = MediaItem.trip_id.in_(accessible_ids) if accessible_ids else False
+        conditions = []
+        if accessible_ids:
+            conditions.append(MediaItem.trip_id.in_(accessible_ids))
         if user_id:
-            filter_expr = filter_expr | (MediaItem.uploaded_by_user_id == user_id)
+            conditions.append(MediaItem.uploaded_by_user_id == user_id)
+
+        if not conditions:
+            return []
+
         matching_person_ids = (
             db.query(FaceDetection.person_id)
             .join(MediaItem, MediaItem.id == FaceDetection.media_id)
-            .filter(filter_expr)
+            .filter(or_(*conditions))
             .distinct()
             .all()
         )
-        person_ids = [p[0] for p in matching_person_ids]
+        person_ids = [p[0] for p in matching_person_ids if p[0] is not None]
+        if not person_ids:
+            return []
         people = (
             db.query(Person)
             .filter(Person.id.in_(person_ids))
